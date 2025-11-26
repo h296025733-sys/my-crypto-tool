@@ -2913,6 +2913,17 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 minSignalCountForAnalysis: 10 // 因子组合分析所需的最小样本数
             };
 
+            // 【新增】辅助函数，用于安全地通过 Backtest UI 模块更新状态 (解决模块定义顺序导致的 TDZ 问题)
+            const updateStatus = (message) => {
+                // 依赖于脚本最后完成的全局暴露 (window.Backtest)
+                if (window.Backtest && typeof window.Backtest.updateStatus === 'function') {
+                    window.Backtest.updateStatus(message);
+                } else {
+                    // 如果 Backtest UI 模块还没准备好（理论上不会发生），则回退到控制台输出
+                    console.log("BacktestEngine Status:", message);
+                }
+            };
+
             // 运行回测主流程
             const run = async (params) => {
                 console.log("BacktestEngine: 开始回测...", params);
@@ -2937,7 +2948,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 let baseAssetKlines = null;
                 try {
                     console.log("获取基准资产 (BTCUSDT) K线...");
-                    UI.updateBacktestStatus('获取 BTC 数据...');
+                    // 【修正】使用辅助函数 updateStatus (移除了错误的 UI.updateBacktestStatus)
+                    updateStatus('获取 BTC 数据...');
                     // 必须获取和标的相同数量和周期的 K 线
                     baseAssetKlines = await Api.getKlines('BTCUSDT', interval, fetchLimit);
                 } catch (e) {
@@ -2948,7 +2960,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 // 3. 逐个标的进行回测 (使用顺序执行，避免并发过多导致限频)
                 for (const symbol of symbols) {
                     try {
-                        UI.updateBacktestStatus(`获取 ${symbol} 数据...`);
+                        // 【修正】使用辅助函数 updateStatus
+                        updateStatus(`获取 ${symbol} 数据...`);
                         const klines = await Api.getKlines(symbol, interval, fetchLimit);
                         
                         // 验证数据完整性
@@ -2957,7 +2970,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                             continue;
                         }
 
-                        UI.updateBacktestStatus(`模拟 ${symbol}...`);
+                        // 【修正】使用辅助函数 updateStatus
+                        updateStatus(`模拟 ${symbol}...`);
                         // 确定回测模式
                         const mode = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'].includes(symbol) ? 'major' : 'alt';
                         
@@ -2971,20 +2985,23 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 }
                 
                 if (allSignals.length === 0) {
-                    UI.updateBacktestStatus('完成 (无信号)');
+                    // 【修正】使用辅助函数 updateStatus
+                    updateStatus('完成 (无信号)');
                     UI.showToast("回测未产生任何信号。请检查参数或数据源。", "info");
                     return null;
                 }
 
                 // 4. 分析结果
-                UI.updateBacktestStatus('分析结果中...');
+                // 【修正】使用辅助函数 updateStatus
+                updateStatus('分析结果中...');
                 const results = analyzeResults(allSignals);
                 const factorAnalysis = analyzeFactors(allSignals);
                 const diagnosis = generateDiagnosis(factorAnalysis);
 
                 const duration = ((Utils.now() - startTime) / 1000).toFixed(1);
                 console.log(`BacktestEngine: 回测完成，耗时 ${duration} 秒。`, results);
-                UI.updateBacktestStatus(`完成 (耗时 ${duration}s)`);
+                // 【修正】使用辅助函数 updateStatus
+                updateStatus(`完成 (耗时 ${duration}s)`);
 
                 return { ...results, factorAnalysis, diagnosis, params };
             };
@@ -3289,7 +3306,6 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 getConfig: () => BacktestConfig
             };
         })();
-
 
 
 
@@ -6382,5 +6398,6 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
 </script>
 </body>
 </html>
+
 
 

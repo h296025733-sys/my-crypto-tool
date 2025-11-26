@@ -1882,9 +1882,11 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 
                 // API 与数据源配置 (Requirement IX, VII)
                 binanceApiUrl: "https://fapi.binance.com",
-                // 默认使用您提供的方程式新闻RSS源
+                
+                // 【修复 CORS 问题】默认使用方程式新闻RSS源，并通过 allorigins.win 代理访问以解决跨域问题。
+                // 如果代理不稳定，用户需自行更换代理或使用浏览器 CORS 插件并填入原始地址: https://rss-public.bwe-ws.com/
                 newsSourceType: "bwenews_rss",
-                newsApiUrl: "https://rss-public.bwe-ws.com/", 
+                newsApiUrl: "https://api.allorigins.win/raw?url=https://rss-public.bwe-ws.com/", 
                 
                 // Coinalyze 高级数据源
                 coinalyzeEnabled: false,
@@ -2392,6 +2394,7 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
             };
         })();
 
+        
         // ===================================================================================
         // 模块 2: API 接口层 (Api)
         // 封装所有外部请求 (Binance、Coinalyze、新闻源等)，统一处理超时与错误。
@@ -3524,7 +3527,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
         // 支持高频轮询和方程式新闻源集成。
         // ===================================================================================
         const NewsEngine = (() => {
-            let newsCache = []; // 缓存最近的新闻列表 (内存中)
+            // 【修改点：排序】缓存现在保持正序 (旧 -> 新)
+            let newsCache = []; 
             const MAX_CACHE_SIZE = 200;
             let isFetching = false;
             let consecutiveErrors = 0; // 连续错误计数器，用于自动降频
@@ -3601,15 +3605,26 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
             };
             
             // 解析 RSS/Atom 格式 (使用浏览器内置 DOMParser)
+            // 【修改点：兼容性】增强鲁棒性以处理格式不规范的 XML (如 &alpha)
             const parseRSS = (xmlString) => {
                 if (typeof xmlString !== 'string') return [];
 
                 const parser = new DOMParser();
-                const xmlDoc = parser.parseFromString(xmlString, "text/xml");
+                // 1. 尝试使用严格的 XML 模式解析
+                let xmlDoc = parser.parseFromString(xmlString, "text/xml");
                 
-                // 检查解析错误
+                // 2. 检查解析错误 (Requirement IX.2 兼容性增强)
+                // 如果 XML 格式有误，则回退
                 if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
-                    throw new Error("解析 RSS/XML 失败。");
+                    console.warn("严格 XML 解析失败（例如遇到格式错误的字符实体），尝试使用 HTML 模式回退解析 (兼容模式)...");
+                    
+                    // 3. 尝试使用 HTML 模式解析 (更宽松，能处理部分 HTML 实体和格式错误)
+                    xmlDoc = parser.parseFromString(xmlString, "text/html");
+
+                    // 4. 再次检查是否成功
+                    if (!xmlDoc || (!xmlDoc.querySelector("item, entry") && !xmlDoc.querySelector("rss, feed"))) {
+                         throw new Error("解析 RSS/XML 失败 (即使在兼容模式下)。源内容可能严重损坏。");
+                    }
                 }
                 
                 const items = [];
@@ -3625,7 +3640,10 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                     const link = entry.querySelector("link")?.getAttribute('href') || entry.querySelector("link")?.textContent;
                     
                     // 提取内容 (优先 content:encoded, 然后 description/summary/content)
-                    const contentHtml = entry.getElementsByTagNameNS('*', 'encoded')[0]?.textContent || 
+                    // 注意：HTML 模式下需要更灵活的选择器来查找 content:encoded
+                    const contentEncoded = Array.from(entry.children).find(el => el.tagName.toLowerCase() === 'content:encoded' || el.tagName.toLowerCase() === 'encoded');
+
+                    const contentHtml = contentEncoded?.textContent || 
                                       entry.querySelector("description, summary, content")?.textContent;
                     
                     // 提取时间 (优先 pubDate/published/updated)
@@ -3647,8 +3665,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                     }
                 });
                 
-                // 按时间排序 (新 -> 旧)
-                return items.sort((a, b) => b.timestamp - a.timestamp);
+                // 【修改点：排序】按时间排序 (旧 -> 新，正序)
+                return items.sort((a, b) => a.timestamp - b.timestamp);
             };
             
             // 解析通用 JSON 格式 (尽力而为，适配常见结构)
@@ -3697,7 +3715,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                     return null;
                 }).filter(item => item !== null);
                 
-                 return normalizedItems.sort((a, b) => b.timestamp - a.timestamp);
+                 // 【修改点：排序】按时间排序 (旧 -> 新，正序)
+                 return normalizedItems.sort((a, b) => a.timestamp - b.timestamp);
             };
 
             // 处理新抓取的新闻条目 (去重、合并、提醒)
@@ -3706,16 +3725,19 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
 
                 // 去重并找出真正新的条目
                 const existingIds = new Set(newsCache.map(item => item.id));
+                // 注意：newItems 已经是正序排列的 (旧->新)
                 const freshItems = newItems.filter(item => !existingIds.has(item.id));
 
                 if (freshItems.length > 0) {
                     // console.log(`NewsEngine: 发现 ${freshItems.length} 条新快讯。`);
-                    // 合并到缓存顶部
-                    newsCache = freshItems.concat(newsCache);
                     
-                    // 限制缓存大小
+                    // 【修改点：合并】合并到缓存尾部 (保持正序: 旧 -> 新)
+                    newsCache = newsCache.concat(freshItems);
+                    
+                    // 限制缓存大小 (从头部移除最旧的新闻)
                     if (newsCache.length > MAX_CACHE_SIZE) {
-                        newsCache = newsCache.slice(0, MAX_CACHE_SIZE);
+                        // 保留最新的 MAX_CACHE_SIZE 条
+                        newsCache = newsCache.slice(newsCache.length - MAX_CACHE_SIZE);
                     }
                     
                     // 触发新闻提醒逻辑
@@ -3747,7 +3769,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
 
                 if (importantNews.length > 0) {
                     // 只提醒最新的一条重要新闻，避免刷屏
-                    const topNews = importantNews[0];
+                    // 【修改点：提醒】由于是正序，取最后一条
+                    const topNews = importantNews[importantNews.length - 1];
                     
                     // 使用 Toast 作为小弹窗提示 (非阻塞)
                     UI.showToast(`🚨 重大新闻: ${topNews.title}`, 'warning', 12000, null, () => {
@@ -3765,6 +3788,7 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
             };
 
             // 渲染新闻列表 (Requirement IX.1)
+            // 列表按照 newsCache 的顺序渲染 (现在是正序)
             const renderNewsFeed = () => {
                 const container = document.getElementById('news-feed-container');
                 // 仅在新闻页面激活时渲染
@@ -3781,6 +3805,8 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                         (item.content && item.content.toLowerCase().includes(filterText))
                     );
                 }
+                
+                // filteredNews 已经是正序 (旧->新)，无需反转
 
                 if (filteredNews.length === 0) {
                     container.innerHTML = `<div class="text-center py-8 text-secondary">${newsCache.length === 0 ? '暂无新闻数据。请检查配置。' : '未找到符合过滤条件的新闻。'}</div>`;
@@ -3790,6 +3816,7 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 let html = '';
                 const now = Utils.now();
 
+                // 直接遍历 filteredNews (已经是正序)
                 filteredNews.forEach(item => {
                     const isRead = readIds.has(item.id);
                     // 判断是否为 24 小时内的新闻 (Requirement IX.1)
@@ -3889,9 +3916,15 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                     'custom_rss': '自定义 RSS',
                     'custom_json': '自定义 JSON'
                 };
-                const sourceName = sourceNameMap[settings.newsSourceType] || '未知';
+                let sourceName = sourceNameMap[settings.newsSourceType] || '未知';
+                
+                // 如果使用了代理，添加提示
+                if (settings.newsApiUrl.includes('api.allorigins.win')) {
+                    sourceName += ' (via Proxy)';
+                }
 
-                let content = `当前新闻源: <span id="news-source-name">${sourceName}</span> | 刷新频率: <span id="news-poll-interval">${settings.newsPollInterval}</span> 秒`;
+                // 【修改点】在状态栏显示当前排序方式
+                let content = `当前新闻源: <span id="news-source-name">${sourceName}</span> | 刷新频率: <span id="news-poll-interval">${settings.newsPollInterval}</span> 秒 | 排序: 旧 → 新`;
                 
                 if (message) {
                     content += ` | 状态: ${message}`;
@@ -3939,6 +3972,7 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
                 markAllRead
             };
         })();
+        
 
         // ===================================================================================
         // 模块 7: 市场排行 (MarketRankings)
@@ -6398,6 +6432,7 @@ VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
 </script>
 </body>
 </html>
+
 
 
 

@@ -1,519 +1,497 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Play, Pause, Upload, Activity, Layers, AlertTriangle, Crosshair, Search, ArrowUpCircle, ArrowDownCircle, PlusCircle, Scissors, CheckCircle2, XCircle, TrendingUp, Menu, Smartphone, Monitor } from 'lucide-react';
-import { ComposedChart, AreaChart, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceDot, ReferenceLine } from 'recharts';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ultimate Replay V5</title>
+    <!-- 引入 Tailwind CSS (样式) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Babel (让浏览器能看懂 React) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { background-color: #0b0e11; color: #eaecef; overflow: hidden; }
+        /* 隐藏滚动条但保留功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-/**
- * 终极回放器 V5 (响应式版) - 电脑/手机完美二合一
- * 核心升级：引入 Mobile/Desktop 响应式布局引擎 + Tab 切换系统
- */
+    <script type="text/babel" data-type="module">
+        // --- 1. 引入依赖库 (通过 ESM CDN) ---
+        import React, { useState, useEffect, useMemo, useRef } from 'https://esm.sh/react@18.2.0';
+        import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
+        import { 
+            Play, Pause, Upload, Activity, Layers, AlertTriangle, Crosshair, Search, 
+            ArrowUpCircle, ArrowDownCircle, PlusCircle, Scissors, CheckCircle2, XCircle, 
+            TrendingUp, Menu, Smartphone, Monitor 
+        } from 'https://esm.sh/lucide-react@0.263.1';
+        import { 
+            ComposedChart, AreaChart, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
+            ResponsiveContainer, Cell, ReferenceDot, ReferenceLine 
+        } from 'https://esm.sh/recharts@2.12.0?deps=react@18.2.0,react-dom@18.2.0';
 
-// --- 辅助函数 ---
-const fmt = (num) => num ? Number(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
-const fmtPrice = (num) => num ? Number(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 }) : '0.00';
-
-// --- 战术动作识别逻辑 (V4核心算法) ---
-const detectActionType = (prevSize, newSize, side, realizedPnl) => {
-    const absPrev = Math.abs(prevSize);
-    const absNew = Math.abs(newSize);
-    // 1. 开仓
-    if (absPrev === 0 && absNew > 0) return { type: 'OPEN', label: 'OPEN', icon: '🚀', color: '#F0B90B' };
-    
-    // 2. 平仓 (完全平仓)
-    if (absNew === 0 && absPrev > 0) {
-        if (realizedPnl > 0) return { type: 'CLOSE_WIN', label: 'TAKE PROFIT', icon: '💰', color: '#0ECB81' };
-        if (realizedPnl < 0) return { type: 'CLOSE_LOSS', label: 'STOP LOSS', icon: '🛑', color: '#F6465D' };
-        return { type: 'CLOSE', label: 'CLOSE', icon: 'flag', color: '#999' };
-    }
-
-    // 3. 加仓
-    if ((prevSize > 0 && newSize > prevSize) || (prevSize < 0 && newSize < prevSize)) {
-        return { type: 'ADD', label: 'ADD', icon: '➕', color: '#3b82f6' };
-    }
-
-    // 4. 减仓
-    if ((prevSize > 0 && newSize < prevSize && newSize > 0) || (prevSize < 0 && newSize > prevSize && newSize < 0)) {
-        if (realizedPnl > 0) return { type: 'PARTIAL_WIN', label: 'PARTIAL TP', icon: '✂️', color: '#0ECB81' };
-        return { type: 'PARTIAL', label: 'REDUCE', icon: '✂️', color: '#F6465D' };
-    }
-
-    // 5. 反手
-    if ((prevSize > 0 && newSize < 0) || (prevSize < 0 && newSize > 0)) {
-        return { type: 'FLIP', label: 'FLIP', icon: 'xx', color: '#8b5cf6' };
-    }
-
-    return { type: 'TRADE', label: 'TRADE', icon: '•', color: '#fff' };
-};
-
-export default function UltimateReplayResponsive() {
-    const [timeline, setTimeline] = useState([]); 
-    const [rawMarketData, setRawMarketData] = useState({});
-    const [isLoading, setIsLoading] = useState(false);
-    
-    // 播放控制
-    const [currentIndex, setCurrentIndex] = useState(0);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [speed, setSpeed] = useState(100); 
-    const [showImport, setShowImport] = useState(false);
-    
-    // 交互状态
-    const [manualActiveSymbol, setManualActiveSymbol] = useState(null); 
-    const [isAutoFollow, setIsAutoFollow] = useState(true); 
-
-    // 移动端专用状态
-    const [mobileTab, setMobileTab] = useState('positions'); // 'positions' | 'logs' | 'equity'
-
-    const scrollRef = useRef(null);
-
-    // --- 播放循环 ---
-    useEffect(() => {
-        let interval;
-        if (isPlaying && currentIndex < timeline.length - 1) {
-            interval = setInterval(() => {
-                setCurrentIndex(prev => prev + 1);
-            }, speed);
-        } else if (currentIndex >= timeline.length - 1) {
-            setIsPlaying(false);
-        }
-        return () => clearInterval(interval);
-    }, [isPlaying, currentIndex, timeline.length, speed]);
-
-    // 自动滚动日志
-    useEffect(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }, [currentIndex, mobileTab]); // 切换Tab时也尝试滚动
-
-    // --- 数据解析引擎 (完整版) ---
-    const processUploadedFile = (jsonData) => {
-        setIsLoading(true);
-        setTimeout(() => {
-            try {
-                const events = jsonData.events || [];
-                const marketData = jsonData.marketData || {};
-                setRawMarketData(marketData);
-
-                const allTimestamps = new Set();
-                Object.values(marketData).forEach(klines => klines.forEach(k => allTimestamps.add(k.t)));
-                events.forEach(e => allTimestamps.add(e.time));
-                const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
-                
-                let walletBalance = 0; 
-                let positions = {}; 
-                let eventCursor = 0;
-                
-                const processedTimeline = [];
-                const tradeLogs = [];
-                let cumulativeRealizedPnL = 0;
-
-                for (let i = 0; i < sortedTimestamps.length; i++) {
-                    const t = sortedTimestamps[i];
-                    let currentAction = null; 
-
-                    while (eventCursor < events.length && events[eventCursor].time <= t) {
-                        const e = events[eventCursor];
-                        
-                        if (e.type === 'INCOME') {
-                            walletBalance += e.amount;
-                            if (e.subType === 'REALIZED_PNL') cumulativeRealizedPnL += e.amount;
-                        } 
-                        else if (e.type === 'TRADE') {
-                            const sym = e.symbol;
-                            if (!positions[sym]) positions[sym] = { size: 0, entryVal: 0, entryPrice: 0 };
-                            
-                            const pos = positions[sym];
-                            const prevSize = pos.size;
-                            const isBuy = e.side === 'BUY';
-                            const qty = e.qty; 
-                            const price = e.price;
-                            const val = price * qty;
-                            const realizedPnl = e.realizedPnl || 0;
-
-                            const change = isBuy ? qty : -qty;
-                            const newSize = prevSize + change;
-                            const actionMeta = detectActionType(prevSize, newSize, e.side, realizedPnl);
-
-                            // 更新成本价逻辑
-                            const isOpening = (prevSize === 0) || (prevSize > 0 && isBuy) || (prevSize < 0 && !isBuy);
-                            if (isOpening) {
-                                const oldCost = Math.abs(prevSize) * pos.entryPrice;
-                                const newCost = val;
-                                const newTotalSize = Math.abs(prevSize) + qty;
-                                pos.entryPrice = (oldCost + newCost) / newTotalSize;
-                            } else {
-                                const isFlip = (prevSize > 0 && newSize < 0) || (prevSize < 0 && newSize > 0);
-                                if (isFlip) pos.entryPrice = price; 
-                            }
-                            pos.size = newSize;
-
-                            const enhancedEvent = { 
-                                ...e, 
-                                logIndex: tradeLogs.length,
-                                actionType: actionMeta.type,
-                                actionLabel: actionMeta.label,
-                                actionIcon: actionMeta.icon,
-                                actionColor: actionMeta.color,
-                                postSize: newSize 
-                            };
-                            
-                            currentAction = enhancedEvent;
-                            tradeLogs.push(enhancedEvent);
-                        }
-                        eventCursor++;
-                    }
-
-                    // 快照计算
-                    let totalUnrealizedPnL = 0;
-                    let totalPositionValue = 0;
-                    let maxPosSym = null;
-                    let maxPosVal = 0;
-
-                    Object.keys(positions).forEach(sym => {
-                        const pos = positions[sym];
-                        if (Math.abs(pos.size) < 0.00001) return; 
-
-                        const klines = marketData[sym];
-                        if (!klines) return;
-                        
-                        // 手机端优化：查找范围稍微放宽一点点
-                        const kline = klines.find(k => Math.abs(k.t - t) < 3600000); 
-                        const currentPrice = kline ? kline.c : pos.entryPrice; 
-
-                        if (currentPrice > 0) {
-                            const pnl = (currentPrice - pos.entryPrice) * pos.size;
-                            totalUnrealizedPnL += pnl;
-                            const posVal = Math.abs(pos.size) * currentPrice;
-                            totalPositionValue += posVal;
-
-                            if (posVal > maxPosVal) { maxPosVal = posVal; maxPosSym = sym; }
-                            
-                            pos.markPrice = currentPrice;
-                            pos.unrealizedPnL = pnl;
-                            pos.roe = (posVal > 0) ? (pnl / (posVal / 20)) * 100 : 0; 
-                        }
-                    });
-
-                    const equity = walletBalance + totalUnrealizedPnL;
-                    const autoActiveSymbol = currentAction?.symbol || maxPosSym || (processedTimeline[i-1]?.autoActiveSymbol) || 'BTCUSDT';
-                    
-                    processedTimeline.push({
-                        time: t,
-                        dateStr: new Date(t).toLocaleString(),
-                        walletBalance,
-                        equity,
-                        unrealizedPnL: totalUnrealizedPnL,
-                        leverage: equity > 0 ? totalPositionValue / equity : 0,
-                        positions: JSON.parse(JSON.stringify(positions)), 
-                        autoActiveSymbol, 
-                        tradeAction: currentAction,
-                        logs: [...tradeLogs]
-                    });
-                }
-
-                setTimeline(processedTimeline);
-                setCurrentIndex(0);
-                setIsLoading(false);
-                setShowImport(false);
-                setManualActiveSymbol(null); 
-
-            } catch (err) {
-                console.error(err);
-                alert("解析错误: " + err.message);
-                setIsLoading(false);
-            }
-        }, 100);
-    };
-
-    const handleFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (evt) => processUploadedFile(JSON.parse(evt.target.result));
-        reader.readAsText(file);
-    };
-
-    // --- 渲染逻辑 ---
-    const snapshot = timeline[currentIndex];
-    
-    // K 线准备
-    const activeSymbol = (isAutoFollow || !manualActiveSymbol) ? (snapshot?.autoActiveSymbol || 'BTCUSDT') : manualActiveSymbol;
-    const activeKlines = rawMarketData[activeSymbol] || [];
-    const currentKlineIndex = activeKlines.findIndex(k => Math.abs(k.t - snapshot?.time) < 900000); 
-    
-    const displayKlines = [];
-    let currentPrice = 0;
-
-    if (currentKlineIndex !== -1) {
-        currentPrice = activeKlines[currentKlineIndex].c;
-        // 手机端 K 线数量稍微少一点，保证清晰
-        const countBack = window.innerWidth < 768 ? 40 : 60;
-        const start = Math.max(0, currentKlineIndex - countBack);
-        const end = Math.min(activeKlines.length, currentKlineIndex + 15);
+        // --- 2. 核心代码逻辑 (完全保留 V5 功能) ---
         
-        displayKlines.push(...activeKlines.slice(start, end).map(k => ({
-            ...k,
-            range: [Math.min(k.o, k.c), Math.max(k.o, k.c)],
-            color: k.c >= k.o ? '#0ECB81' : '#F6465D', 
-            dateStr: new Date(k.t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
-        })));
-    }
+        // 辅助函数
+        const fmt = (num) => num ? Number(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
+        const fmtPrice = (num) => num ? Number(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 }) : '0.00';
 
-    if (!snapshot) return (
-        <div className="h-screen bg-[#0b0e11] flex flex-col items-center justify-center text-gray-400 font-mono p-4 text-center">
-            <Activity size={64} className="text-[#F0B90B] animate-bounce mb-6"/>
-            <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">ULTIMATE REPLAY <span className="text-[#F0B90B]">V5</span></h1>
-            <p className="mb-8 opacity-70 text-sm md:text-base">PC & Mobile Responsive • Tactical Analysis</p>
-            <button 
-                onClick={() => setShowImport(true)} 
-                className="px-8 py-4 bg-[#F0B90B] text-black font-bold rounded-lg hover:bg-[#ffe270] transition flex items-center gap-2 shadow-lg shadow-yellow-900/20"
-            >
-                <Upload size={20}/> IMPORT JSON
-            </button>
-            {showImport && <ImportModal onClose={() => setShowImport(false)} onUpload={handleFileUpload} isLoading={isLoading} />}
-        </div>
-    );
+        // 战术动作识别逻辑
+        const detectActionType = (prevSize, newSize, side, realizedPnl) => {
+            const absPrev = Math.abs(prevSize);
+            const absNew = Math.abs(newSize);
+            if (absPrev === 0 && absNew > 0) return { type: 'OPEN', label: 'OPEN', icon: '🚀', color: '#F0B90B' };
+            if (absNew === 0 && absPrev > 0) {
+                if (realizedPnl > 0) return { type: 'CLOSE_WIN', label: 'TAKE PROFIT', icon: '💰', color: '#0ECB81' };
+                if (realizedPnl < 0) return { type: 'CLOSE_LOSS', label: 'STOP LOSS', icon: '🛑', color: '#F6465D' };
+                return { type: 'CLOSE', label: 'CLOSE', icon: 'flag', color: '#999' };
+            }
+            if ((prevSize > 0 && newSize > prevSize) || (prevSize < 0 && newSize < prevSize)) {
+                return { type: 'ADD', label: 'ADD', icon: '➕', color: '#3b82f6' };
+            }
+            if ((prevSize > 0 && newSize < prevSize && newSize > 0) || (prevSize < 0 && newSize > prevSize && newSize < 0)) {
+                if (realizedPnl > 0) return { type: 'PARTIAL_WIN', label: 'PARTIAL TP', icon: '✂️', color: '#0ECB81' };
+                return { type: 'PARTIAL', label: 'REDUCE', icon: '✂️', color: '#F6465D' };
+            }
+            if ((prevSize > 0 && newSize < 0) || (prevSize < 0 && newSize > 0)) {
+                return { type: 'FLIP', label: 'FLIP', icon: 'xx', color: '#8b5cf6' };
+            }
+            return { type: 'TRADE', label: 'TRADE', icon: '•', color: '#fff' };
+        };
 
-    const isHighRisk = snapshot.leverage > 20;
-
-    // --- 响应式组件渲染 ---
-
-    return (
-        <div className="flex flex-col h-screen bg-[#0b0e11] text-[#eaecef] font-sans overflow-hidden select-none">
+        // 主组件
+        function App() {
+            const [timeline, setTimeline] = useState([]); 
+            const [rawMarketData, setRawMarketData] = useState({});
+            const [isLoading, setIsLoading] = useState(false);
             
-            {/* === 1. 顶部数据栏 (响应式调整) === */}
-            <header className="h-auto md:h-14 bg-[#1e2329] border-b border-black flex flex-col md:flex-row items-center justify-between px-2 md:px-4 py-2 z-20 gap-2 md:gap-0">
-                
-                {/* 第一行：时间与核心数据 (手机端紧凑布局) */}
-                <div className="flex items-center justify-between w-full md:w-auto gap-2 md:gap-6">
-                    <div className="flex flex-col justify-center border-r border-gray-700 pr-2 md:pr-6">
-                        <span className="text-[8px] md:text-[10px] text-gray-500 font-mono">DATE</span>
-                        <span className="text-xs md:text-sm font-bold text-white font-mono leading-tight">{snapshot.dateStr.split(' ')[0]}</span>
-                        <span className="text-[10px] text-gray-400 font-mono leading-none md:hidden">{snapshot.dateStr.split(' ')[1]}</span>
-                    </div>
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(100); 
+            const [showImport, setShowImport] = useState(false);
+            
+            const [manualActiveSymbol, setManualActiveSymbol] = useState(null); 
+            const [isAutoFollow, setIsAutoFollow] = useState(true); 
 
-                    <div className="flex-1 flex justify-around md:justify-start md:gap-6">
-                        <div>
-                            <div className="text-[8px] md:text-[10px] text-gray-400">EQUITY</div>
-                            <span className="text-sm md:text-lg font-mono font-bold text-white">${fmt(snapshot.equity)}</span>
-                        </div>
-                        <div>
-                            <div className="text-[8px] md:text-[10px] text-gray-400">PNL</div>
-                            <span className={`text-sm md:text-lg font-mono font-bold ${snapshot.unrealizedPnL >= 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
-                                {snapshot.unrealizedPnL >= 0 ? '+' : ''}{fmt(snapshot.unrealizedPnL)}
-                            </span>
-                        </div>
-                        <div className="hidden md:block">
-                            <div className="text-[10px] text-gray-400 flex items-center gap-1">Lev {isHighRisk && <AlertTriangle size={10} className="text-[#F6465D]"/>}</div>
-                            <span className={`text-lg font-mono font-bold ${isHighRisk ? 'text-[#F6465D]' : 'text-[#F0B90B]'}`}>{snapshot.leverage.toFixed(2)}x</span>
-                        </div>
-                    </div>
-                </div>
+            const [mobileTab, setMobileTab] = useState('positions'); 
+            const scrollRef = useRef(null);
 
-                {/* 控制按钮组 (手机端稍微缩小) */}
-                <div className="flex items-center gap-2 w-full md:w-auto justify-end">
-                     <div className="md:hidden flex items-center gap-1 mr-auto text-xs font-mono text-gray-500">
-                        Lev: <span className={`${isHighRisk ? 'text-[#F6465D]' : 'text-[#F0B90B]'}`}>{snapshot.leverage.toFixed(1)}x</span>
-                     </div>
+            useEffect(() => {
+                let interval;
+                if (isPlaying && currentIndex < timeline.length - 1) {
+                    interval = setInterval(() => {
+                        setCurrentIndex(prev => prev + 1);
+                    }, speed);
+                } else if (currentIndex >= timeline.length - 1) {
+                    setIsPlaying(false);
+                }
+                return () => clearInterval(interval);
+            }, [isPlaying, currentIndex, timeline.length, speed]);
 
+            useEffect(() => {
+                if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            }, [currentIndex, mobileTab]);
+
+            const processUploadedFile = (jsonData) => {
+                setIsLoading(true);
+                setTimeout(() => {
+                    try {
+                        const events = jsonData.events || [];
+                        const marketData = jsonData.marketData || {};
+                        setRawMarketData(marketData);
+
+                        const allTimestamps = new Set();
+                        Object.values(marketData).forEach(klines => klines.forEach(k => allTimestamps.add(k.t)));
+                        events.forEach(e => allTimestamps.add(e.time));
+                        const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
+                        
+                        let walletBalance = 0; 
+                        let positions = {}; 
+                        let eventCursor = 0;
+                        
+                        const processedTimeline = [];
+                        const tradeLogs = [];
+                        let cumulativeRealizedPnL = 0;
+
+                        for (let i = 0; i < sortedTimestamps.length; i++) {
+                            const t = sortedTimestamps[i];
+                            let currentAction = null; 
+
+                            while (eventCursor < events.length && events[eventCursor].time <= t) {
+                                const e = events[eventCursor];
+                                if (e.type === 'INCOME') {
+                                    walletBalance += e.amount;
+                                    if (e.subType === 'REALIZED_PNL') cumulativeRealizedPnL += e.amount;
+                                } else if (e.type === 'TRADE') {
+                                    const sym = e.symbol;
+                                    if (!positions[sym]) positions[sym] = { size: 0, entryVal: 0, entryPrice: 0 };
+                                    
+                                    const pos = positions[sym];
+                                    const prevSize = pos.size;
+                                    const isBuy = e.side === 'BUY';
+                                    const qty = e.qty; 
+                                    const price = e.price;
+                                    const val = price * qty;
+                                    const realizedPnl = e.realizedPnl || 0;
+
+                                    const change = isBuy ? qty : -qty;
+                                    const newSize = prevSize + change;
+                                    const actionMeta = detectActionType(prevSize, newSize, e.side, realizedPnl);
+
+                                    const isOpening = (prevSize === 0) || (prevSize > 0 && isBuy) || (prevSize < 0 && !isBuy);
+                                    if (isOpening) {
+                                        const oldCost = Math.abs(prevSize) * pos.entryPrice;
+                                        const newCost = val;
+                                        const newTotalSize = Math.abs(prevSize) + qty;
+                                        pos.entryPrice = (oldCost + newCost) / newTotalSize;
+                                    } else {
+                                        const isFlip = (prevSize > 0 && newSize < 0) || (prevSize < 0 && newSize > 0);
+                                        if (isFlip) pos.entryPrice = price; 
+                                    }
+                                    pos.size = newSize;
+
+                                    const enhancedEvent = { 
+                                        ...e, 
+                                        logIndex: tradeLogs.length,
+                                        actionType: actionMeta.type,
+                                        actionLabel: actionMeta.label,
+                                        actionIcon: actionMeta.icon,
+                                        actionColor: actionMeta.color,
+                                        postSize: newSize 
+                                    };
+                                    
+                                    currentAction = enhancedEvent;
+                                    tradeLogs.push(enhancedEvent);
+                                }
+                                eventCursor++;
+                            }
+
+                            let totalUnrealizedPnL = 0;
+                            let totalPositionValue = 0;
+                            let maxPosSym = null;
+                            let maxPosVal = 0;
+
+                            Object.keys(positions).forEach(sym => {
+                                const pos = positions[sym];
+                                if (Math.abs(pos.size) < 0.00001) return; 
+
+                                const klines = marketData[sym];
+                                if (!klines) return;
+                                
+                                const kline = klines.find(k => Math.abs(k.t - t) < 3600000); 
+                                const currentPrice = kline ? kline.c : pos.entryPrice; 
+
+                                if (currentPrice > 0) {
+                                    const pnl = (currentPrice - pos.entryPrice) * pos.size;
+                                    totalUnrealizedPnL += pnl;
+                                    const posVal = Math.abs(pos.size) * currentPrice;
+                                    totalPositionValue += posVal;
+                                    if (posVal > maxPosVal) { maxPosVal = posVal; maxPosSym = sym; }
+                                    
+                                    pos.markPrice = currentPrice;
+                                    pos.unrealizedPnL = pnl;
+                                    pos.roe = (posVal > 0) ? (pnl / (posVal / 20)) * 100 : 0; 
+                                }
+                            });
+
+                            const equity = walletBalance + totalUnrealizedPnL;
+                            const autoActiveSymbol = currentAction?.symbol || maxPosSym || (processedTimeline[i-1]?.autoActiveSymbol) || 'BTCUSDT';
+                            
+                            processedTimeline.push({
+                                time: t,
+                                dateStr: new Date(t).toLocaleString(),
+                                walletBalance,
+                                equity,
+                                unrealizedPnL: totalUnrealizedPnL,
+                                leverage: equity > 0 ? totalPositionValue / equity : 0,
+                                positions: JSON.parse(JSON.stringify(positions)), 
+                                autoActiveSymbol, 
+                                tradeAction: currentAction,
+                                logs: [...tradeLogs]
+                            });
+                        }
+
+                        setTimeline(processedTimeline);
+                        setCurrentIndex(0);
+                        setIsLoading(false);
+                        setShowImport(false);
+                        setManualActiveSymbol(null); 
+                    } catch (err) {
+                        console.error(err);
+                        alert("解析错误: " + err.message);
+                        setIsLoading(false);
+                    }
+                }, 100);
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (evt) => processUploadedFile(JSON.parse(evt.target.result));
+                reader.readAsText(file);
+            };
+
+            const snapshot = timeline[currentIndex];
+            const activeSymbol = (isAutoFollow || !manualActiveSymbol) ? (snapshot?.autoActiveSymbol || 'BTCUSDT') : manualActiveSymbol;
+            const activeKlines = rawMarketData[activeSymbol] || [];
+            const currentKlineIndex = activeKlines.findIndex(k => Math.abs(k.t - snapshot?.time) < 900000); 
+            
+            const displayKlines = [];
+            let currentPrice = 0;
+
+            if (currentKlineIndex !== -1) {
+                currentPrice = activeKlines[currentKlineIndex].c;
+                const countBack = window.innerWidth < 768 ? 40 : 60;
+                const start = Math.max(0, currentKlineIndex - countBack);
+                const end = Math.min(activeKlines.length, currentKlineIndex + 15);
+                displayKlines.push(...activeKlines.slice(start, end).map(k => ({
+                    ...k,
+                    range: [Math.min(k.o, k.c), Math.max(k.o, k.c)],
+                    color: k.c >= k.o ? '#0ECB81' : '#F6465D', 
+                    dateStr: new Date(k.t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
+                })));
+            }
+
+            if (!snapshot) return (
+                <div className="h-screen bg-[#0b0e11] flex flex-col items-center justify-center text-gray-400 font-mono p-4 text-center">
+                    <Activity size={64} className="text-[#F0B90B] animate-bounce mb-6"/>
+                    <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">ULTIMATE REPLAY <span className="text-[#F0B90B]">V5</span></h1>
+                    <p className="mb-8 opacity-70 text-sm md:text-base">PC & Mobile Responsive • Tactical Analysis</p>
                     <button 
-                        onClick={() => { setIsAutoFollow(!isAutoFollow); if (!isAutoFollow) setManualActiveSymbol(null); }}
-                        className={`text-[10px] md:text-xs px-2 md:px-3 py-1 rounded border font-bold ${isAutoFollow ? 'bg-[#F0B90B] text-black border-[#F0B90B]' : 'bg-transparent text-gray-400 border-gray-600'}`}
+                        onClick={() => setShowImport(true)} 
+                        className="px-8 py-4 bg-[#F0B90B] text-black font-bold rounded-lg hover:bg-[#ffe270] transition flex items-center gap-2 shadow-lg shadow-yellow-900/20"
                     >
-                        {isAutoFollow ? "AUTO" : "MANUAL"}
+                        <Upload size={20}/> IMPORT JSON
                     </button>
-                    <button onClick={() => setShowImport(true)} className="text-gray-400 hover:text-white px-2 md:px-3 py-1 rounded text-[10px] md:text-xs border border-gray-600">
-                        RESET
-                    </button>
-                </div>
-            </header>
-
-            {/* === 2. 主体区域 (电脑左右，手机上下) === */}
-            <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-                
-                {/* --- 区域 A: K线图表 (手机上部分，电脑左侧) --- */}
-                <div className="w-full md:flex-1 flex flex-col border-r border-black relative bg-[#161a1e] h-[55%] md:h-full">
-                    
-                    {/* 头部大字 */}
-                    <div className="absolute top-2 left-4 z-10 flex flex-col pointer-events-none">
-                        <div className="flex items-baseline gap-2 md:gap-3">
-                            <h2 className="text-2xl md:text-3xl font-bold text-white tracking-tight z-10 relative">{activeSymbol}</h2>
-                            <span className={`text-lg md:text-xl font-mono z-10 relative ${currentPrice >= (displayKlines[0]?.o || 0) ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
-                                {fmtPrice(currentPrice)}
-                            </span>
-                        </div>
-                        {snapshot.tradeAction && snapshot.tradeAction.symbol === activeSymbol && (
-                            <div className="mt-2 flex items-center gap-2 animate-in slide-in-from-left duration-300">
-                                <div className="px-3 py-1 rounded-r-full font-bold text-white shadow-lg flex items-center gap-1 text-xs md:text-sm"
-                                     style={{ backgroundColor: snapshot.tradeAction.actionColor }}>
-                                    <span className="text-base">{snapshot.tradeAction.actionIcon}</span>
-                                    <span>{snapshot.tradeAction.actionLabel}</span>
+                    {showImport && (
+                        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-[#1e2329] border border-gray-600 rounded-lg w-full max-w-sm md:max-w-md shadow-2xl">
+                                <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-[#252a30]">
+                                    <h3 className="text-white font-bold text-sm md:text-base">Import Data</h3>
+                                    <button onClick={() => setShowImport(false)} className="p-2 text-gray-400">✕</button>
+                                </div>
+                                <div className="p-6">
+                                    {isLoading ? (
+                                        <div className="text-center text-[#F0B90B] animate-pulse">Processing...</div>
+                                    ) : (
+                                        <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-600 border-dashed rounded-lg cursor-pointer bg-[#2b3139]">
+                                            <p className="text-sm text-gray-400">Click to upload JSON</p>
+                                            <input type="file" className="hidden" accept=".json" onChange={handleFileUpload} />
+                                        </label>
+                                    )}
                                 </div>
                             </div>
-                        )}
-                    </div>
-
-                    <div className="flex-1 pt-8 md:pt-8">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <ComposedChart data={displayKlines} margin={{top: 20, right: 50, left: 0, bottom: 5}}>
-                                <CartesianGrid stroke="#2b3139" vertical={false} strokeDasharray="3 3"/>
-                                <XAxis dataKey="dateStr" stroke="#555" tick={{fontSize: 9}} minTickGap={40}/>
-                                <YAxis domain={['auto', 'auto']} orientation="right" stroke="#555" tick={{fontSize: 9, fill: '#848e9c'}} width={45}/>
-                                <Tooltip contentStyle={{backgroundColor: '#1e2329', borderColor: '#474d57', color: '#eaecef', fontSize: '11px'}}/>
-                                <Bar dataKey="range" maxBarSize={6} isAnimationActive={false}>
-                                    {displayKlines.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
-                                </Bar>
-                                <ReferenceLine y={currentPrice} stroke="#848e9c" strokeDasharray="3 3" />
-                                <ReferenceDot x={snapshot.dateStr} y={currentPrice} r={3} fill="#fff" stroke="none" />
-                            </ComposedChart>
-                        </ResponsiveContainer>
-                    </div>
-
-                    {/* 播放控制条 (响应式) */}
-                    <div className="h-12 md:h-16 bg-[#1e2329] border-t border-black flex items-center px-2 md:px-4 gap-2 md:gap-4 z-20">
-                         <button 
-                             onClick={() => setIsPlaying(!isPlaying)}
-                             className="w-8 h-8 md:w-10 md:h-10 rounded bg-[#F0B90B] hover:bg-[#ffe270] flex items-center justify-center text-black shadow-lg"
-                         >
-                             {isPlaying ? <Pause size={16} fill="black"/> : <Play size={16} fill="black"/>}
-                         </button>
-                         <div className="flex-1 flex flex-col justify-center">
-                             <input 
-                                 type="range" min={0} max={timeline.length - 1} value={currentIndex}
-                                 onChange={(e) => { setIsPlaying(false); setCurrentIndex(Number(e.target.value)); }}
-                                 className="w-full h-1 md:h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-[#F0B90B] touch-action-none"
-                             />
-                         </div>
-                         <select 
-                             value={speed} onChange={(e) => setSpeed(Number(e.target.value))}
-                             className="bg-[#2b3139] text-xs text-white border border-gray-600 rounded px-1 py-1 outline-none"
-                         >
-                             <option value={200}>1x</option>
-                             <option value={100}>2x</option>
-                             <option value={50}>5x</option>
-                             <option value={10}>Max</option>
-                         </select>
-                    </div>
-                </div>
-
-                {/* --- 区域 B: 数据面板 (手机下部分，电脑右侧) --- */}
-                <div className="w-full md:w-[360px] bg-[#1e2329] border-l border-black flex flex-col h-[45%] md:h-full">
-                    
-                    {/* 移动端 Tab 切换栏 (仅在小屏显示) */}
-                    <div className="flex md:hidden border-b border-gray-800">
-                        <button onClick={() => setMobileTab('positions')} className={`flex-1 py-2 text-xs font-bold ${mobileTab==='positions' ? 'text-[#F0B90B] border-b-2 border-[#F0B90B]' : 'text-gray-500'}`}>POSITIONS</button>
-                        <button onClick={() => setMobileTab('logs')} className={`flex-1 py-2 text-xs font-bold ${mobileTab==='logs' ? 'text-[#F0B90B] border-b-2 border-[#F0B90B]' : 'text-gray-500'}`}>LOGS</button>
-                        <button onClick={() => setMobileTab('equity')} className={`flex-1 py-2 text-xs font-bold ${mobileTab==='equity' ? 'text-[#F0B90B] border-b-2 border-[#F0B90B]' : 'text-gray-500'}`}>CURVE</button>
-                    </div>
-
-                    {/* 1. 持仓列表 (在电脑端总是显示，手机端看Tab) */}
-                    <div className={`flex-1 flex-col overflow-hidden border-b border-black ${mobileTab === 'positions' ? 'flex' : 'hidden md:flex'}`}>
-                        <div className="px-4 py-2 bg-[#252a30] text-[10px] font-bold text-gray-400 uppercase flex items-center gap-2 hidden md:flex">
-                            <Layers size={12}/> Active Positions
                         </div>
-                        <div className="flex-1 overflow-y-auto">
-                            {Object.keys(snapshot.positions).map(sym => {
-                                const pos = snapshot.positions[sym];
-                                if (Math.abs(pos.size) < 0.0001) return null;
-                                const isLong = pos.size > 0;
-                                const isActive = sym === activeSymbol;
-
-                                return (
-                                    <div 
-                                        key={sym} 
-                                        onClick={() => { setIsAutoFollow(false); setManualActiveSymbol(sym); }}
-                                        className={`p-3 border-b border-gray-800 cursor-pointer active:bg-[#2b3139] md:hover:bg-[#2b3139] transition relative ${isActive ? 'bg-[#2b3139]' : ''}`}
-                                    >
-                                        {isActive && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#F0B90B]"></div>}
-                                        <div className="flex justify-between items-center mb-1">
-                                            <span className="font-bold text-sm text-gray-200">{sym}</span>
-                                            <span className={`text-[10px] md:text-xs px-2 py-0.5 rounded font-bold ${isLong ? 'bg-[#0ECB81] text-black' : 'bg-[#F6465D] text-white'}`}>
-                                                {isLong ? 'LONG' : 'SHORT'}
-                                            </span>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-y-1 text-xs">
-                                            <div className="text-gray-500">Sz: <span className="text-gray-300 font-mono">{Math.abs(pos.size)}</span></div>
-                                            <div className="text-right text-gray-500">Ent: <span className="text-gray-300 font-mono">{fmtPrice(pos.entryPrice)}</span></div>
-                                            <div className="text-gray-500">PnL: <span className={`font-mono font-bold ${pos.unrealizedPnL >=0 ? 'text-[#0ECB81]':'text-[#F6465D]'}`}>{pos.unrealizedPnL.toFixed(2)}</span></div>
-                                            <div className="text-right text-gray-500">ROE: <span className={`font-mono ${pos.roe >=0 ? 'text-[#0ECB81]':'text-[#F6465D]'}`}>{pos.roe.toFixed(0)}%</span></div>
-                                        </div>
-                                    </div>
-                                )
-                            })}
-                            {Object.values(snapshot.positions).every(p => Math.abs(p.size) < 0.0001) && (
-                                <div className="flex flex-col items-center justify-center h-20 text-gray-600">
-                                    <span className="text-xs">No active positions</span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* 2. 净值曲线 (Mini) */}
-                    <div className={`h-32 md:h-24 bg-[#161a1e] border-b border-black relative p-2 ${mobileTab === 'equity' ? 'flex' : 'hidden md:flex'}`}>
-                        <div className="absolute top-1 left-2 text-[10px] text-gray-500 z-10">EQUITY TREND</div>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={timeline.slice(0, currentIndex + 1)}>
-                                <Area type="monotone" dataKey="equity" stroke="#F0B90B" fill="#F0B90B" fillOpacity={0.1} strokeWidth={1.5} isAnimationActive={false}/>
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </div>
-
-                    {/* 3. 智能交易日志 */}
-                    <div className={`flex-1 md:h-1/3 flex flex-col bg-[#161a1e] ${mobileTab === 'logs' ? 'flex' : 'hidden md:flex'}`}>
-                        <div className="px-4 py-2 bg-[#252a30] text-[10px] font-bold text-gray-400 uppercase flex items-center gap-2 border-y border-black hidden md:flex">
-                            <Activity size={12}/> Action History
-                        </div>
-                        <div className="flex-1 overflow-y-auto font-mono text-xs" ref={scrollRef}>
-                            {snapshot.logs.map((log, i) => (
-                                <div key={i} className={`flex justify-between items-center py-2 px-3 border-b border-gray-800/50 ${log.logIndex === snapshot.tradeAction?.logIndex ? 'bg-[#F0B90B]/10 border-l-2 border-l-[#F0B90B]' : ''}`}>
-                                    <div className="flex flex-col gap-1">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-lg">{log.actionIcon}</span>
-                                            <span className="font-bold text-gray-300">{log.symbol}</span>
-                                            <span className="text-[10px] px-1 rounded border opacity-70" style={{ borderColor: log.actionColor, color: log.actionColor }}>
-                                                {log.actionLabel}
-                                            </span>
-                                        </div>
-                                        <span className="text-[10px] text-gray-600 pl-7">{new Date(log.time).toLocaleTimeString()}</span>
-                                    </div>
-                                    <div className="text-right">
-                                        <div className="text-gray-300">{fmtPrice(log.price)}</div>
-                                        {log.realizedPnl !== 0 && (
-                                            <div className={`${log.realizedPnl > 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
-                                                {log.realizedPnl > 0 ? '+' : ''}{Math.round(log.realizedPnl)}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-
-            {/* 导入弹窗 */}
-            {showImport && <ImportModal onClose={() => setShowImport(false)} onUpload={handleFileUpload} isLoading={isLoading} />}
-        </div>
-    );
-}
-
-function ImportModal({ onClose, onUpload, isLoading }) {
-    return (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-[#1e2329] border border-gray-600 rounded-lg w-full max-w-sm md:max-w-md shadow-2xl">
-                <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-[#252a30]">
-                    <h3 className="text-white font-bold text-sm md:text-base">Import Data</h3>
-                    <button onClick={onClose} className="p-2 text-gray-400">✕</button>
-                </div>
-                <div className="p-6">
-                    {isLoading ? (
-                        <div className="text-center text-[#F0B90B] animate-pulse">Processing...</div>
-                    ) : (
-                        <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-600 border-dashed rounded-lg cursor-pointer bg-[#2b3139]">
-                            <p className="text-sm text-gray-400">Click to upload JSON</p>
-                            <input type="file" className="hidden" accept=".json" onChange={onUpload} />
-                        </label>
                     )}
                 </div>
-            </div>
-        </div>
-    );
-}
+            );
+
+            const isHighRisk = snapshot.leverage > 20;
+
+            return (
+                <div className="flex flex-col h-screen bg-[#0b0e11] text-[#eaecef] font-sans overflow-hidden select-none">
+                    <header className="h-auto md:h-14 bg-[#1e2329] border-b border-black flex flex-col md:flex-row items-center justify-between px-2 md:px-4 py-2 z-20 gap-2 md:gap-0">
+                        <div className="flex items-center justify-between w-full md:w-auto gap-2 md:gap-6">
+                            <div className="flex flex-col justify-center border-r border-gray-700 pr-2 md:pr-6">
+                                <span className="text-[8px] md:text-[10px] text-gray-500 font-mono">DATE</span>
+                                <span className="text-xs md:text-sm font-bold text-white font-mono leading-tight">{snapshot.dateStr.split(' ')[0]}</span>
+                                <span className="text-[10px] text-gray-400 font-mono leading-none md:hidden">{snapshot.dateStr.split(' ')[1]}</span>
+                            </div>
+                            <div className="flex-1 flex justify-around md:justify-start md:gap-6">
+                                <div>
+                                    <div className="text-[8px] md:text-[10px] text-gray-400">EQUITY</div>
+                                    <span className="text-sm md:text-lg font-mono font-bold text-white">${fmt(snapshot.equity)}</span>
+                                </div>
+                                <div>
+                                    <div className="text-[8px] md:text-[10px] text-gray-400">PNL</div>
+                                    <span className={`text-sm md:text-lg font-mono font-bold ${snapshot.unrealizedPnL >= 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
+                                        {snapshot.unrealizedPnL >= 0 ? '+' : ''}{fmt(snapshot.unrealizedPnL)}
+                                    </span>
+                                </div>
+                                <div className="hidden md:block">
+                                    <div className="text-[10px] text-gray-400 flex items-center gap-1">Lev {isHighRisk && <AlertTriangle size={10} className="text-[#F6465D]"/>}</div>
+                                    <span className={`text-lg font-mono font-bold ${isHighRisk ? 'text-[#F6465D]' : 'text-[#F0B90B]'}`}>{snapshot.leverage.toFixed(2)}x</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+                             <div className="md:hidden flex items-center gap-1 mr-auto text-xs font-mono text-gray-500">
+                                Lev: <span className={`${isHighRisk ? 'text-[#F6465D]' : 'text-[#F0B90B]'}`}>{snapshot.leverage.toFixed(1)}x</span>
+                             </div>
+                            <button 
+                                onClick={() => { setIsAutoFollow(!isAutoFollow); if (!isAutoFollow) setManualActiveSymbol(null); }}
+                                className={`text-[10px] md:text-xs px-2 md:px-3 py-1 rounded border font-bold ${isAutoFollow ? 'bg-[#F0B90B] text-black border-[#F0B90B]' : 'bg-transparent text-gray-400 border-gray-600'}`}
+                            >
+                                {isAutoFollow ? "AUTO" : "MANUAL"}
+                            </button>
+                            <button onClick={() => setShowImport(true)} className="text-gray-400 hover:text-white px-2 md:px-3 py-1 rounded text-[10px] md:text-xs border border-gray-600">
+                                RESET
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                        <div className="w-full md:flex-1 flex flex-col border-r border-black relative bg-[#161a1e] h-[55%] md:h-full">
+                            <div className="absolute top-2 left-4 z-10 flex flex-col pointer-events-none">
+                                <div className="flex items-baseline gap-2 md:gap-3">
+                                    <h2 className="text-2xl md:text-3xl font-bold text-white tracking-tight z-10 relative">{activeSymbol}</h2>
+                                    <span className={`text-lg md:text-xl font-mono z-10 relative ${currentPrice >= (displayKlines[0]?.o || 0) ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
+                                        {fmtPrice(currentPrice)}
+                                    </span>
+                                </div>
+                                {snapshot.tradeAction && snapshot.tradeAction.symbol === activeSymbol && (
+                                    <div className="mt-2 flex items-center gap-2 animate-in slide-in-from-left duration-300">
+                                        <div className="px-3 py-1 rounded-r-full font-bold text-white shadow-lg flex items-center gap-1 text-xs md:text-sm"
+                                             style={{ backgroundColor: snapshot.tradeAction.actionColor }}>
+                                            <span className="text-base">{snapshot.tradeAction.actionIcon}</span>
+                                            <span>{snapshot.tradeAction.actionLabel}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex-1 pt-8 md:pt-8">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <ComposedChart data={displayKlines} margin={{top: 20, right: 50, left: 0, bottom: 5}}>
+                                        <CartesianGrid stroke="#2b3139" vertical={false} strokeDasharray="3 3"/>
+                                        <XAxis dataKey="dateStr" stroke="#555" tick={{fontSize: 9}} minTickGap={40}/>
+                                        <YAxis domain={['auto', 'auto']} orientation="right" stroke="#555" tick={{fontSize: 9, fill: '#848e9c'}} width={45}/>
+                                        <Tooltip contentStyle={{backgroundColor: '#1e2329', borderColor: '#474d57', color: '#eaecef', fontSize: '11px'}}/>
+                                        <Bar dataKey="range" maxBarSize={6} isAnimationActive={false}>
+                                            {displayKlines.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+                                        </Bar>
+                                        <ReferenceLine y={currentPrice} stroke="#848e9c" strokeDasharray="3 3" />
+                                        <ReferenceDot x={snapshot.dateStr} y={currentPrice} r={3} fill="#fff" stroke="none" />
+                                    </ComposedChart>
+                                </ResponsiveContainer>
+                            </div>
+
+                            <div className="h-12 md:h-16 bg-[#1e2329] border-t border-black flex items-center px-2 md:px-4 gap-2 md:gap-4 z-20">
+                                 <button 
+                                     onClick={() => setIsPlaying(!isPlaying)}
+                                     className="w-8 h-8 md:w-10 md:h-10 rounded bg-[#F0B90B] hover:bg-[#ffe270] flex items-center justify-center text-black shadow-lg"
+                                 >
+                                     {isPlaying ? <Pause size={16} fill="black"/> : <Play size={16} fill="black"/>}
+                                 </button>
+                                 <div className="flex-1 flex flex-col justify-center">
+                                     <input 
+                                         type="range" min={0} max={timeline.length - 1} value={currentIndex}
+                                         onChange={(e) => { setIsPlaying(false); setCurrentIndex(Number(e.target.value)); }}
+                                         className="w-full h-1 md:h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-[#F0B90B] touch-action-none"
+                                     />
+                                 </div>
+                                 <select 
+                                     value={speed} onChange={(e) => setSpeed(Number(e.target.value))}
+                                     className="bg-[#2b3139] text-xs text-white border border-gray-600 rounded px-1 py-1 outline-none"
+                                 >
+                                     <option value={200}>1x</option>
+                                     <option value={100}>2x</option>
+                                     <option value={50}>5x</option>
+                                     <option value={10}>Max</option>
+                                 </select>
+                            </div>
+                        </div>
+
+                        <div className="w-full md:w-[360px] bg-[#1e2329] border-l border-black flex flex-col h-[45%] md:h-full">
+                            <div className="flex md:hidden border-b border-gray-800">
+                                <button onClick={() => setMobileTab('positions')} className={`flex-1 py-2 text-xs font-bold ${mobileTab==='positions' ? 'text-[#F0B90B] border-b-2 border-[#F0B90B]' : 'text-gray-500'}`}>POSITIONS</button>
+                                <button onClick={() => setMobileTab('logs')} className={`flex-1 py-2 text-xs font-bold ${mobileTab==='logs' ? 'text-[#F0B90B] border-b-2 border-[#F0B90B]' : 'text-gray-500'}`}>LOGS</button>
+                                <button onClick={() => setMobileTab('equity')} className={`flex-1 py-2 text-xs font-bold ${mobileTab==='equity' ? 'text-[#F0B90B] border-b-2 border-[#F0B90B]' : 'text-gray-500'}`}>CURVE</button>
+                            </div>
+
+                            <div className={`flex-1 flex-col overflow-hidden border-b border-black ${mobileTab === 'positions' ? 'flex' : 'hidden md:flex'}`}>
+                                <div className="px-4 py-2 bg-[#252a30] text-[10px] font-bold text-gray-400 uppercase flex items-center gap-2 hidden md:flex">
+                                    <Layers size={12}/> Active Positions
+                                </div>
+                                <div className="flex-1 overflow-y-auto">
+                                    {Object.keys(snapshot.positions).map(sym => {
+                                        const pos = snapshot.positions[sym];
+                                        if (Math.abs(pos.size) < 0.0001) return null;
+                                        const isLong = pos.size > 0;
+                                        const isActive = sym === activeSymbol;
+
+                                        return (
+                                            <div 
+                                                key={sym} 
+                                                onClick={() => { setIsAutoFollow(false); setManualActiveSymbol(sym); }}
+                                                className={`p-3 border-b border-gray-800 cursor-pointer active:bg-[#2b3139] md:hover:bg-[#2b3139] transition relative ${isActive ? 'bg-[#2b3139]' : ''}`}
+                                            >
+                                                {isActive && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#F0B90B]"></div>}
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="font-bold text-sm text-gray-200">{sym}</span>
+                                                    <span className={`text-[10px] md:text-xs px-2 py-0.5 rounded font-bold ${isLong ? 'bg-[#0ECB81] text-black' : 'bg-[#F6465D] text-white'}`}>
+                                                        {isLong ? 'LONG' : 'SHORT'}
+                                                    </span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-y-1 text-xs">
+                                                    <div className="text-gray-500">Sz: <span className="text-gray-300 font-mono">{Math.abs(pos.size)}</span></div>
+                                                    <div className="text-right text-gray-500">Ent: <span className="text-gray-300 font-mono">{fmtPrice(pos.entryPrice)}</span></div>
+                                                    <div className="text-gray-500">PnL: <span className={`font-mono font-bold ${pos.unrealizedPnL >=0 ? 'text-[#0ECB81]':'text-[#F6465D]'}`}>{pos.unrealizedPnL.toFixed(2)}</span></div>
+                                                    <div className="text-right text-gray-500">ROE: <span className={`font-mono ${pos.roe >=0 ? 'text-[#0ECB81]':'text-[#F6465D]'}`}>{pos.roe.toFixed(0)}%</span></div>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                    {Object.values(snapshot.positions).every(p => Math.abs(p.size) < 0.0001) && (
+                                        <div className="flex flex-col items-center justify-center h-20 text-gray-600">
+                                            <span className="text-xs">No active positions</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className={`h-32 md:h-24 bg-[#161a1e] border-b border-black relative p-2 ${mobileTab === 'equity' ? 'flex' : 'hidden md:flex'}`}>
+                                <div className="absolute top-1 left-2 text-[10px] text-gray-500 z-10">EQUITY TREND</div>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={timeline.slice(0, currentIndex + 1)}>
+                                        <Area type="monotone" dataKey="equity" stroke="#F0B90B" fill="#F0B90B" fillOpacity={0.1} strokeWidth={1.5} isAnimationActive={false}/>
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            </div>
+
+                            <div className={`flex-1 md:h-1/3 flex flex-col bg-[#161a1e] ${mobileTab === 'logs' ? 'flex' : 'hidden md:flex'}`}>
+                                <div className="px-4 py-2 bg-[#252a30] text-[10px] font-bold text-gray-400 uppercase flex items-center gap-2 border-y border-black hidden md:flex">
+                                    <Activity size={12}/> Action History
+                                </div>
+                                <div className="flex-1 overflow-y-auto font-mono text-xs" ref={scrollRef}>
+                                    {snapshot.logs.map((log, i) => (
+                                        <div key={i} className={`flex justify-between items-center py-2 px-3 border-b border-gray-800/50 ${log.logIndex === snapshot.tradeAction?.logIndex ? 'bg-[#F0B90B]/10 border-l-2 border-l-[#F0B90B]' : ''}`}>
+                                            <div className="flex flex-col gap-1">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-lg">{log.actionIcon}</span>
+                                                    <span className="font-bold text-gray-300">{log.symbol}</span>
+                                                    <span className="text-[10px] px-1 rounded border opacity-70" style={{ borderColor: log.actionColor, color: log.actionColor }}>
+                                                        {log.actionLabel}
+                                                    </span>
+                                                </div>
+                                                <span className="text-[10px] text-gray-600 pl-7">{new Date(log.time).toLocaleTimeString()}</span>
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="text-gray-300">{fmtPrice(log.price)}</div>
+                                                {log.realizedPnl !== 0 && (
+                                                    <div className={`${log.realizedPnl > 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
+                                                        {log.realizedPnl > 0 ? '+' : ''}{Math.round(log.realizedPnl)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {showImport && <ImportModal onClose={() => setShowImport(false)} onUpload={handleFileUpload} isLoading={isLoading} />}
+                </div>
+            );
+        }
+
+        // --- 3. 挂载 React 应用 ---
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
